@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ABC Company · Nimbus — Landing</title>
+  <link rel="stylesheet" href="/static/style.css"/>
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <span class="logo">ABC</span>
+      <div>
+        <div class="product">Nimbus Workspace</div>
+        <div class="tagline">Fictional SaaS demo for LaunchDarkly SE exercise</div>
+      </div>
+    </div>
+    <div class="pill" id="conn-pill">Listening for flag changes…</div>
+  </header>
+
+  <main>
+    <section class="hero" id="hero" data-enabled="{{ 'true' if enabled else 'false' }}">
+      <div class="hero-inner">
+        <p class="eyebrow">Trusted by teams shipping quality software</p>
+        <div id="hero-variant-off" class="variant {% if enabled %}hidden{% endif %}">
+          <h1>Bring your team together in one place</h1>
+          <p class="lede">Original hero — flag <code>{{ flag_key }}</code> is off for this context.</p>
+          <a class="btn secondary" href="#">Start free trial</a>
+        </div>
+        <div id="hero-variant-on" class="variant {% if not enabled %}hidden{% endif %}">
+          <h1>Ship faster without cutting corners</h1>
+          <p class="lede">New hero experience — flag <code>{{ flag_key }}</code> is on. Toggle in LaunchDarkly to roll back instantly.</p>
+          <a class="btn primary" href="#">See Nimbus in action</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Targeting context (Part 2)</h2>
+      <p>Use these attributes in LaunchDarkly for individual or rule-based targeting. Save to refresh evaluation + SSE.</p>
+      <form id="ctx-form" class="grid">
+        <label>Name<br/><input name="name" type="text" value="{{ session.name }}" maxlength="80"/></label>
+        <label>Email<br/><input name="email" type="email" value="{{ session.email }}" placeholder="you@company.com"/></label>
+        <label>Plan<br/>
+          <select name="plan">
+            <option value="free" {% if session.plan == 'free' %}selected{% endif %}>free</option>
+            <option value="pro" {% if session.plan == 'pro' %}selected{% endif %}>pro</option>
+            <option value="enterprise" {% if session.plan == 'enterprise' %}selected{% endif %}>enterprise</option>
+          </select>
+        </label>
+        <label>Region<br/>
+          <select name="region">
+            <option value="us-east" {% if session.region == 'us-east' %}selected{% endif %}>us-east</option>
+            <option value="us-west" {% if session.region == 'us-west' %}selected{% endif %}>us-west</option>
+            <option value="eu-west" {% if session.region == 'eu-west' %}selected{% endif %}>eu-west</option>
+          </select>
+        </label>
+        <div class="actions span-2">
+          <button type="submit" class="btn primary">Save context</button>
+        </div>
+      </form>
+      <p class="meta">Context key (stable per browser session): <code>{{ context_key }}</code></p>
+      <p class="meta" id="eval-meta">Last evaluation reason: <code>{{ reason or "—" }}</code></p>
+    </section>
+
+    <section class="panel">
+      <h2>Remediation (Part 1)</h2>
+      <p>Turn the flag environment off via API (optional), or toggle in the LaunchDarkly UI.</p>
+      <button type="button" class="btn danger" id="btn-remediate">POST /api/remediate</button>
+      <pre id="remediate-out" class="out"></pre>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <small>This app is not affiliated with ABC Company except as a fictional homework scenario.</small>
+  </footer>
+
+  <script>
+(function () {
+  const hero = document.getElementById('hero');
+  const offEl = document.getElementById('hero-variant-off');
+  const onEl = document.getElementById('hero-variant-on');
+  const pill = document.getElementById('conn-pill');
+  const evalMeta = document.getElementById('eval-meta');
+  const form = document.getElementById('ctx-form');
+
+  function applyVariation(enabled) {
+    hero.dataset.enabled = enabled ? 'true' : 'false';
+    offEl.classList.toggle('hidden', !!enabled);
+    onEl.classList.toggle('hidden', !enabled);
+  }
+
+  function connectSSE() {
+    const es = new EventSource('/events/stream');
+    es.onmessage = function (ev) {
+      try {
+        const msg = JSON.parse(ev.data);
+        applyVariation(!!msg.variation);
+      } catch (e) {}
+    };
+    es.onopen = function () {
+      pill.textContent = 'Live — flag updates stream without reload';
+      pill.classList.add('ok');
+    };
+    es.onerror = function () {
+      pill.textContent = 'Stream interrupted — reconnecting…';
+      pill.classList.remove('ok');
+    };
+    return es;
+  }
+
+  let es = connectSSE();
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const fd = new FormData(form);
+    const body = {
+      name: fd.get('name') || '',
+      email: fd.get('email') || '',
+      plan: fd.get('plan') || 'free',
+      region: fd.get('region') || 'us-east'
+    };
+    const r = await fetch('/api/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await r.json();
+    if (data.evaluation_reason) {
+      evalMeta.innerHTML = 'Last evaluation reason: <code>' + data.evaluation_reason + '</code>';
+    }
+    applyVariation(!!data.variation);
+    es.close();
+    es = connectSSE();
+  });
+
+  document.getElementById('btn-remediate').addEventListener('click', async function () {
+    const pre = document.getElementById('remediate-out');
+    pre.textContent = '…';
+    try {
+      const r = await fetch('/api/remediate', { method: 'POST' });
+      const txt = await r.text();
+      pre.textContent = r.status + ' ' + txt;
+    } catch (err) {
+      pre.textContent = String(err);
+    }
+  });
+
+  applyVariation(hero.dataset.enabled === 'true');
+})();
+  </script>
+</body>
+</html>
