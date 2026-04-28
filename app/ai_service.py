@@ -108,6 +108,8 @@ async def chat_turn(ctx: Context, user_message: str, ai_config_key: str) -> dict
     try:
         resp = await model.invoke(user_message)
         text = (resp.message.content or "").strip()
+        if not text:
+            text = "[Out of credits — add billing details to your OpenAI account to enable live replies.]"
         return {"ok": True, "mode": "live", "reply": text, **meta}
     except Exception as exc:
         log.warning("model.invoke failed: %s", exc)
