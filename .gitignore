@@ -4,3 +4,6 @@ __pycache__/
 .env
 .pytest_cache/
 .DS_Store
+
+# Homework spec (local only; do not publish)
+Candidate_HW_-_SE_FY26Q2.pdf
