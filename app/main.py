@@ -10,9 +10,8 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any
 
-import httpx
 import ldclient
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -20,7 +19,7 @@ from ldclient.context import Context
 from ldclient.evaluation import EvaluationDetail
 from pydantic import BaseModel, Field
 
-from app import ld_service
+from app import ai_service, ld_service
 from app.ld_service import broadcast_flag_state
 from app.settings import Settings
 
@@ -30,7 +29,6 @@ ROOT = Path(__file__).resolve().parent.parent
 
 templates = Jinja2Templates(directory=str(ROOT / "templates"))
 
-# session_id -> LaunchDarkly Context (in-memory; fine for local demo)
 sessions: dict[str, Context] = {}
 
 
@@ -52,6 +50,11 @@ async def lifespan(app: FastAPI):
     def schedule_broadcast() -> None:
         loop.call_soon_threadsafe(lambda: broadcast_flag_state(settings.feature_flag_key))
 
+    if settings.sdk_key:
+        log.info("LaunchDarkly online, flag=%r", settings.feature_flag_key)
+    else:
+        log.warning("LAUNCHDARKLY_SDK_KEY empty — offline mode")
+
     ld_service.init_ld(
         sdk_key=settings.sdk_key,
         offline=not bool(settings.sdk_key),
@@ -62,7 +65,7 @@ async def lifespan(app: FastAPI):
     ld_service.close_ld()
 
 
-app = FastAPI(title="ABC Company · Nimbus (LaunchDarkly demo)", lifespan=lifespan)
+app = FastAPI(title="ABC Company · Nimbus", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
 
 
@@ -105,6 +108,10 @@ class ContextUpdate(BaseModel):
     region: str = Field("us-east", max_length=64)
 
 
+class ChatMessage(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+
+
 @app.middleware("http")
 async def demo_session_cookie(request: Request, call_next):
     sid = request.cookies.get("demo_sid")
@@ -144,15 +151,14 @@ async def home(
             "enabled": enabled,
             "reason": _reason_kind(detail) if detail else "",
             "context_key": sid,
-            "session": session_email_plan_region(ctx),
+            "session": session_attrs(ctx),
+            "ai_config_key": settings.ai_config_key,
+            "experiment_event_key": settings.experiment_conversion_event_key,
         },
     )
 
 
-def session_email_plan_region(ctx: Context) -> dict[str, str]:
-    """Expose attributes for template (avoid relying on internal Context helpers)."""
-
-    # ldclient.Context uses .get_value - check
+def session_attrs(ctx: Context) -> dict[str, str]:
     return {
         "email": str(ctx.get("email") or ""),
         "plan": str(ctx.get("plan") or ""),
@@ -178,8 +184,32 @@ async def api_context_update(
         "ok": True,
         "variation": enabled,
         "evaluation_reason": _reason_kind(detail) if detail else "",
-        "attributes": session_email_plan_region(ctx),
+        "attributes": session_attrs(ctx),
     }
+
+
+@app.post("/api/events/hero-cta")
+async def api_experiment_hero_cta(
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    """Send a custom event for experimentation metrics (matches EXPERIMENT_CONVERSION_EVENT_KEY)."""
+    sid = request.state.demo_sid
+    ctx = ctx_from_session(sid)
+    ldclient.get().track(settings.experiment_conversion_event_key, ctx)
+    ldclient.get().flush()
+    return {"ok": True, "event_key": settings.experiment_conversion_event_key}
+
+
+@app.post("/api/chat")
+async def api_chat(
+    body: ChatMessage,
+    request: Request,
+    settings: Annotated[Settings, Depends(get_settings)],
+):
+    sid = request.state.demo_sid
+    ctx = ctx_from_session(sid)
+    return await ai_service.chat_turn(ctx, body.message, settings.ai_config_key)
 
 
 @app.get("/api/variation")
@@ -192,7 +222,7 @@ async def api_variation(request: Request, settings: Annotated[Settings, Depends(
         "flag_key": settings.feature_flag_key,
         "variation": enabled,
         "evaluation_reason": _reason_kind(detail) if detail else "",
-        "attributes": session_email_plan_region(ctx),
+        "attributes": session_attrs(ctx),
     }
 
 
@@ -210,54 +240,11 @@ async def events_stream(request: Request, settings: Annotated[Settings, Depends(
         fk = settings.feature_flag_key
         try:
             initial = bool(client.variation(fk, resolve_ctx(), False))
-            payload = json.dumps({"flag_key": fk, "variation": initial})
-            yield f"data: {payload}\n\n"
+            yield f"data: {json.dumps({'flag_key': fk, 'variation': initial})}\n\n"
             while True:
                 val = await queue.get()
-                out = json.dumps({"flag_key": fk, "variation": bool(val)})
-                yield f"data: {out}\n\n"
+                yield f"data: {json.dumps({'flag_key': fk, 'variation': bool(val)})}\n\n"
         finally:
             ld_service.unregister_connection(queue)
 
     return StreamingResponse(gen(), media_type="text/event-stream")
-
-
-@app.post("/api/remediate")
-async def api_remediate(settings: Annotated[Settings, Depends(get_settings)]):
-    """
-    Optional: PATCH the flag's environment toggle off via LaunchDarkly REST API.
-    You can always remediate manually in the LaunchDarkly UI instead.
-    """
-    if not settings.api_access_token or not settings.project_key:
-        raise HTTPException(
-            status_code=501,
-            detail=(
-                "Set LAUNCHDARKLY_API_ACCESS_TOKEN and LAUNCHDARKLY_PROJECT_KEY for programmatic "
-                "remediation, or turn the flag off in the LaunchDarkly dashboard."
-            ),
-        )
-
-    flag_key = settings.feature_flag_key
-    env_key = settings.environment_key
-    url = f"https://app.launchdarkly.com/api/v2/flags/{settings.project_key}/{flag_key}"
-    patch_body = [{"op": "replace", "path": f"/environments/{env_key}/on", "value": False}]
-    headers = {
-        "Authorization": settings.api_access_token,
-        "Content-Type": "application/json-patch+json",
-    }
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        r = await client.patch(url, headers=headers, json=patch_body)
-
-    if r.status_code >= 400:
-        log.warning("LaunchDarkly API PATCH failed: %s %s", r.status_code, r.text[:500])
-        raise HTTPException(
-            status_code=502,
-            detail=f"LaunchDarkly API error {r.status_code}: verify PROJECT_KEY, ENVIRONMENT_KEY, and flag key.",
-        )
-
-    return {"ok": True, "note": "Flag environment toggle set to off; SSE clients should update within seconds."}
-
-
-def create_app():
-    return app

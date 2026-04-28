@@ -25,12 +25,12 @@
         <div id="hero-variant-off" class="variant {% if enabled %}hidden{% endif %}">
           <h1>Bring your team together in one place</h1>
           <p class="lede">Original hero — flag <code>{{ flag_key }}</code> is off for this context.</p>
-          <a class="btn secondary" href="#">Start free trial</a>
+          <button type="button" class="btn secondary js-hero-cta">Start free trial</button>
         </div>
         <div id="hero-variant-on" class="variant {% if not enabled %}hidden{% endif %}">
           <h1>Ship faster without cutting corners</h1>
           <p class="lede">New hero experience — flag <code>{{ flag_key }}</code> is on. Toggle in LaunchDarkly to roll back instantly.</p>
-          <a class="btn primary" href="#">See Nimbus in action</a>
+          <button type="button" class="btn primary js-hero-cta">See Nimbus in action</button>
         </div>
       </div>
     </section>
@@ -61,13 +61,23 @@
       </form>
       <p class="meta">Context key (stable per browser session): <code>{{ context_key }}</code></p>
       <p class="meta" id="eval-meta">Last evaluation reason: <code>{{ reason or "—" }}</code></p>
+      <p class="meta">Experiment conversion event (track sends this key): <code>{{ experiment_event_key }}</code></p>
     </section>
 
     <section class="panel">
-      <h2>Remediation (Part 1)</h2>
-      <p>Turn the flag environment off via API (optional), or toggle in the LaunchDarkly UI.</p>
-      <button type="button" class="btn danger" id="btn-remediate">POST /api/remediate</button>
-      <pre id="remediate-out" class="out"></pre>
+      <h2>Support chat (Extra credit · AI Configs)</h2>
+      <p>
+        Prompts and model come from LaunchDarkly AI Config key <code>{{ ai_config_key }}</code>.
+        Set <code>OPENAI_API_KEY</code> for live completions (see README).
+      </p>
+      <div id="chat-log" class="chat-log" aria-live="polite"></div>
+      <form id="chat-form" class="chat-row">
+        <label class="chat-grow">
+          <span class="sr-only">Message</span>
+          <input type="text" name="message" placeholder="Ask about Nimbus Workspace…" maxlength="4000" autocomplete="off"/>
+        </label>
+        <button type="submit" class="btn primary">Send</button>
+      </form>
     </section>
   </main>
 
@@ -111,6 +121,44 @@
 
   let es = connectSSE();
 
+  document.querySelectorAll('.js-hero-cta').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      fetch('/api/events/hero-cta', { method: 'POST', credentials: 'same-origin' }).catch(function () {});
+    });
+  });
+
+  const chatForm = document.getElementById('chat-form');
+  const chatLog = document.getElementById('chat-log');
+  if (chatForm && chatLog) {
+    chatForm.addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const fd = new FormData(chatForm);
+      const msg = (fd.get('message') || '').trim();
+      if (!msg) return;
+      chatLog.textContent = 'Thinking…';
+      try {
+        const r = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ message: msg })
+        });
+        const data = await r.json();
+        if (!data.ok) {
+          chatLog.textContent = data.error || 'Request failed';
+          return;
+        }
+        var meta = '';
+        if (data.mode) meta += '[' + data.mode + '] ';
+        if (data.model_name) meta += 'model: ' + data.model_name + '\n';
+        if (data.system_prompt_preview) meta += 'system preview: ' + data.system_prompt_preview + '\n';
+        chatLog.textContent = meta + '\n' + (data.reply || '');
+      } catch (err) {
+        chatLog.textContent = 'Network error';
+      }
+    });
+  }
+
   form.addEventListener('submit', async function (e) {
     e.preventDefault();
     const fd = new FormData(form);
@@ -132,18 +180,6 @@
     applyVariation(!!data.variation);
     es.close();
     es = connectSSE();
-  });
-
-  document.getElementById('btn-remediate').addEventListener('click', async function () {
-    const pre = document.getElementById('remediate-out');
-    pre.textContent = '…';
-    try {
-      const r = await fetch('/api/remediate', { method: 'POST' });
-      const txt = await r.text();
-      pre.textContent = r.status + ' ' + txt;
-    } catch (err) {
-      pre.textContent = String(err);
-    }
   });
 
   applyVariation(hero.dataset.enabled === 'true');
