@@ -1,3 +1,14 @@
+"""
+Application settings loaded from `.env` (see `.env.example` and README).
+
+LaunchDarkly resources are not created by this code — you create them in the LD UI (or API)
+and set keys here so they match:
+
+  - Boolean flag  → FEATURE_FLAG_KEY (type boolean)
+  - AI Config       → LAUNCHDARKLY_AI_CONFIG_KEY (completion mode), optional for chat extra credit
+  - Experiment metric event name → EXPERIMENT_CONVERSION_EVENT_KEY, optional for experimentation
+"""
+
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,26 +18,36 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
+def _truthy(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass(frozen=True)
 class Settings:
     feature_flag_key: str
     sdk_key: str
     ai_config_key: str
     experiment_conversion_event_key: str
+    ld_observability_enabled: bool
+    otel_service_name: str
+    otel_service_version: str
 
     @staticmethod
     def load() -> "Settings":
         return Settings(
-            # Must match the boolean flag key you created in LaunchDarkly (e.g. "hero-component-v2").
-            # Create this flag in your LD project before running the app.
+            # LD UI: create a boolean flag with this exact key (or change the env default to match your flag).
             feature_flag_key=os.getenv("FEATURE_FLAG_KEY", "hero-component-v2").strip(),
-            # Replace with your server-side SDK key from LaunchDarkly (Settings → Environments → SDK key).
-            # Without this, the app runs in offline mode and all flags return their default values.
+            # LD UI: Environments → Server-side SDK key (sdk-…). Paste into .env as LAUNCHDARKLY_SDK_KEY.
+            # If empty, ld_service runs offline — flags never sync from LaunchDarkly.
             sdk_key=(os.getenv("LAUNCHDARKLY_SDK_KEY") or "").strip(),
-            # Must match the completion-mode AI Config key you created in LaunchDarkly.
+            # LD UI: AI Configs → completion-mode config with this key (optional; chat falls back if missing).
             ai_config_key=os.getenv("LAUNCHDARKLY_AI_CONFIG_KEY", "nimbus-support-chat").strip(),
-            # Must match the custom metric event key you created in LaunchDarkly for experimentation.
+            # LD UI: metric / experiment event key — match when creating a custom metric for hero CTA events.
             experiment_conversion_event_key=os.getenv(
                 "EXPERIMENT_CONVERSION_EVENT_KEY", "nimbus-hero-cta-click"
             ).strip(),
+            # LaunchDarkly Observability plugin (OpenTelemetry → LD). See README "Observability".
+            ld_observability_enabled=_truthy("LAUNCHDARKLY_OBSERVABILITY"),
+            otel_service_name=(os.getenv("OTEL_SERVICE_NAME") or "nimbus").strip(),
+            otel_service_version=(os.getenv("OTEL_SERVICE_VERSION") or "dev").strip(),
         )

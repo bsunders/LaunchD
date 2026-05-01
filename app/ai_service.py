@@ -63,6 +63,8 @@ async def chat_turn(ctx: Context, user_message: str, ai_config_key: str) -> dict
     """
     One chat turn: evaluates AI Config in LaunchDarkly, then calls OpenAI when configured.
     Without OPENAI_API_KEY, returns evaluated config metadata only (still proves LD-driven prompts/models).
+
+    ai_config_key comes from LAUNCHDARKLY_AI_CONFIG_KEY — create a completion-mode AI Config in LD with that key.
     """
     user_message = (user_message or "").strip()[:4000]
     if not user_message:

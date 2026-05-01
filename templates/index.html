@@ -129,13 +129,37 @@
 
   const chatForm = document.getElementById('chat-form');
   const chatLog = document.getElementById('chat-log');
+  const chatInput = chatForm ? chatForm.querySelector('input[name="message"]') : null;
+
+  function appendChat(role, text) {
+    var line = document.createElement('div');
+    line.style.marginBottom = '0.5rem';
+    line.style.borderLeft = role === 'you' ? '3px solid #fca311' : '3px solid #adb5bd';
+    line.style.paddingLeft = '0.5rem';
+    line.style.whiteSpace = 'pre-wrap';
+    var label = document.createElement('strong');
+    label.textContent = role === 'you' ? 'You: ' : 'Nimbus: ';
+    line.appendChild(label);
+    line.appendChild(document.createTextNode(text));
+    chatLog.appendChild(line);
+    chatLog.scrollTop = chatLog.scrollHeight;
+  }
+
   if (chatForm && chatLog) {
     chatForm.addEventListener('submit', async function (e) {
       e.preventDefault();
       const fd = new FormData(chatForm);
       const msg = (fd.get('message') || '').trim();
       if (!msg) return;
-      chatLog.textContent = 'Thinking…';
+      chatInput.value = '';
+      chatInput.focus();
+      appendChat('you', msg);
+      var thinking = document.createElement('div');
+      thinking.textContent = 'Thinking…';
+      thinking.style.color = '#6c757d';
+      thinking.style.fontSize = '0.9em';
+      chatLog.appendChild(thinking);
+      chatLog.scrollTop = chatLog.scrollHeight;
       try {
         const r = await fetch('/api/chat', {
           method: 'POST',
@@ -143,18 +167,22 @@
           credentials: 'same-origin',
           body: JSON.stringify({ message: msg })
         });
+        chatLog.removeChild(thinking);
         const data = await r.json();
         if (!data.ok) {
-          chatLog.textContent = data.error || 'Request failed';
+          appendChat('nimbus', data.error || 'Request failed');
           return;
         }
-        var meta = '';
-        if (data.mode) meta += '[' + data.mode + '] ';
-        if (data.model_name) meta += 'model: ' + data.model_name + '\n';
-        if (data.system_prompt_preview) meta += 'system preview: ' + data.system_prompt_preview + '\n';
-        chatLog.textContent = meta + '\n' + (data.reply || '');
+        var reply = data.reply || '';
+        if (data.mode === 'config_only' || data.mode === 'disabled') {
+          var meta = '[' + data.mode + ']';
+          if (data.model_name) meta += ' model: ' + data.model_name;
+          reply = meta + '\n' + reply;
+        }
+        appendChat('nimbus', reply);
       } catch (err) {
-        chatLog.textContent = 'Network error';
+        chatLog.removeChild(thinking);
+        appendChat('nimbus', 'Network error');
       }
     });
   }

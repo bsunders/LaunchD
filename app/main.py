@@ -19,8 +19,11 @@ from ldclient.context import Context
 from ldclient.evaluation import EvaluationDetail
 from pydantic import BaseModel, Field
 
+from ldobserve import ObservabilityConfig, observe
+
 from app import ai_service, ld_service
 from app.ld_service import broadcast_flag_state
+from app.observe_ld import emit_startup_telemetry
 from app.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -55,12 +58,23 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("LAUNCHDARKLY_SDK_KEY empty — offline mode")
 
+    obs_cfg: ObservabilityConfig | None = None
+    if settings.sdk_key and settings.ld_observability_enabled:
+        obs_cfg = ObservabilityConfig(
+            service_name=settings.otel_service_name,
+            service_version=settings.otel_service_version,
+        )
+
+    # feature_flag_key must exist in LaunchDarkly (boolean) — same environment as sdk_key.
     ld_service.init_ld(
         sdk_key=settings.sdk_key,
         offline=not bool(settings.sdk_key),
         flag_key=settings.feature_flag_key,
         on_flag_change=schedule_broadcast,
+        observability_config=obs_cfg,
     )
+    # LD docs: call observe.record_log / observe.start_span after client init so the plugin has registered.
+    emit_startup_telemetry(settings)
     yield
     ld_service.close_ld()
 
@@ -133,6 +147,22 @@ async def demo_session_cookie(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def ld_observability_request_span(request: Request, call_next):
+    """Register after session middleware so this runs outermost: one span per HTTP request."""
+    if not observe.is_initialized():
+        return await call_next(request)
+    with observe.start_span(
+        "nimbus.http.request",
+        attributes={
+            "http.method": request.method,
+            "http.target": request.url.path,
+            "custom": "request_wrapper",
+        },
+    ):
+        return await call_next(request)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home(
     request: Request,
@@ -140,8 +170,9 @@ async def home(
 ):
     sid = request.state.demo_sid
     ctx = ctx_from_session(sid)
-    enabled = bool(ldclient.get().variation(settings.feature_flag_key, ctx, False))
+    # Hero on/off: boolean flag key from FEATURE_FLAG_KEY — create that flag in LD (see README).
     detail = ldclient.get().variation_detail(settings.feature_flag_key, ctx, False)
+    enabled = bool(detail.value)
 
     return templates.TemplateResponse(
         request,
@@ -177,8 +208,8 @@ async def api_context_update(
     replace_context(sid, body.email.strip(), body.name.strip(), body.plan, body.region.strip())
     ctx = sessions[sid]
     broadcast_flag_state(settings.feature_flag_key)
-    enabled = bool(ldclient.get().variation(settings.feature_flag_key, ctx, False))
     detail = ldclient.get().variation_detail(settings.feature_flag_key, ctx, False)
+    enabled = bool(detail.value)
 
     return {
         "ok": True,
@@ -196,6 +227,7 @@ async def api_experiment_hero_cta(
     """Send a custom event for experimentation metrics (matches EXPERIMENT_CONVERSION_EVENT_KEY)."""
     sid = request.state.demo_sid
     ctx = ctx_from_session(sid)
+    # Event key must match the custom metric event key you configured in LaunchDarkly for experiments.
     ldclient.get().track(settings.experiment_conversion_event_key, ctx)
     ldclient.get().flush()
     return {"ok": True, "event_key": settings.experiment_conversion_event_key}

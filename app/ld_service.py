@@ -8,6 +8,7 @@ from typing import Callable, List, Tuple
 
 import ldclient
 from ldclient import Config, Context
+from ldobserve import ObservabilityConfig, ObservabilityPlugin
 
 log = logging.getLogger(__name__)
 
@@ -37,15 +38,30 @@ def broadcast_flag_state(flag_key: str) -> None:
         queue.put_nowait(bool(client.variation(flag_key, ctx, False)))
 
 
-def init_ld(sdk_key: str, offline: bool, flag_key: str, on_flag_change: Callable[[], None]) -> None:
+def init_ld(
+    sdk_key: str,
+    offline: bool,
+    flag_key: str,
+    on_flag_change: Callable[[], None],
+    observability_config: ObservabilityConfig | None = None,
+) -> None:
+    # Caller passes LAUNCHDARKLY_SDK_KEY from .env (server-side key only; never send to the browser).
+    # flag_key must match the boolean flag key you created in LaunchDarkly for listener filtering.
+    # observability_config: optional LaunchDarkly ObservabilityPlugin (OpenTelemetry); omitted offline.
+    plugins = []
+    if not offline and observability_config is not None:
+        plugins.append(ObservabilityPlugin(observability_config))
+        log.info("LaunchDarkly Observability plugin enabled (OTEL → LaunchDarkly)")
+
     if offline:
-        # No SDK key provided — run in offline mode so the app starts without LD credentials.
-        # All flag evaluations will return their hardcoded default values.
+        # No SDK key in .env — offline mode so the app starts without LD credentials.
+        # Evaluations use SDK defaults (e.g. variation(..., False)); recreate flags in LD and set the key to go live.
         ldclient.set_config(Config(sdk_key="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX", offline=True))
     else:
-        # Initialize the LaunchDarkly server-side SDK with your SDK key.
-        # The SDK key is a server-side secret — never expose it to the browser.
-        ldclient.set_config(Config(sdk_key=sdk_key))
+        cfg_kw = {"sdk_key": sdk_key}
+        if plugins:
+            cfg_kw["plugins"] = plugins
+        ldclient.set_config(Config(**cfg_kw))
 
     client = ldclient.get()
 

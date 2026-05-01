@@ -4,6 +4,9 @@ __pycache__/
 .env
 .pytest_cache/
 .DS_Store
+.vscode/
 
-# Homework spec (local only; do not publish)
+# Local-only (homework spec, private demo script — not required for the public repo)
 Candidate_HW_-_SE_FY26Q2.pdf
+task.md
+demo.md
