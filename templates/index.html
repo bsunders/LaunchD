@@ -98,6 +98,7 @@
     hero.dataset.enabled = enabled ? 'true' : 'false';
     offEl.classList.toggle('hidden', !!enabled);
     onEl.classList.toggle('hidden', !enabled);
+    document.body.classList.toggle('flag-on', !!enabled);
   }
 
   function connectSSE() {
