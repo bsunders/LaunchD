@@ -67,6 +67,26 @@ main {
   border-radius: 12px;
   padding: 2.5rem 2rem;
   margin-bottom: 2rem;
+  transition: background 0.4s ease, box-shadow 0.4s ease;
+}
+
+.hero[data-enabled="true"] {
+  background: linear-gradient(135deg, #14213d 0%, #1d3461 100%);
+  box-shadow: 0 4px 24px rgba(252, 163, 17, 0.25);
+  color: #fff;
+}
+
+.hero[data-enabled="true"] .eyebrow {
+  color: #fca311;
+}
+
+.hero[data-enabled="true"] .lede {
+  color: #dee2e6;
+}
+
+.hero[data-enabled="true"] code {
+  background: rgba(255, 255, 255, 0.15);
+  color: #fca311;
 }
 
 .hero-inner h1 {
